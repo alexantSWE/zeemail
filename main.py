@@ -6,6 +6,7 @@ import json
 import smtplib
 from email.mime.text import MIMEText
 import logging
+import webbrowser
 
 # Keyring and DNS libraries
 import keyring
@@ -262,13 +263,14 @@ def clear_fields_action():
 
 
 def open_config_window():
-    """Opens a Toplevel window to configure email account using keyring."""
+    """Opens a Toplevel window to configure email account using keyring.""" # Restored docstring
     config_window = tk.Toplevel(root)
     config_window.title("Configure Email Account (Secure)")
     config_window.geometry("450x350")
     config_window.transient(root)
     config_window.grab_set()
 
+    # --- MOVED THIS CODE BACK INTO open_config_window ---
     ttk.Label(config_window, text="Credentials stored in your system's secure keyring.", wraplength=430).pack(pady=5)
     instructions = (
         "For Gmail, generate an 'App Password':\n"
@@ -292,6 +294,99 @@ def open_config_window():
     password_entry_cfg = ttk.Entry(form_frame, textvariable=password_var_cfg, show="*", width=40)
     password_entry_cfg.grid(row=1, column=1, sticky="ew", pady=2)
     form_frame.columnconfigure(1, weight=1)
+    # --- END OF MOVED INSTRUCTIONS AND FORM FRAME ---
+
+    # --- MOVED THIS CODE BACK INTO open_config_window ---
+    
+    
+      
+def show_about_dialog():
+    # Displays the About ZeeMail dialog window
+    about_window = tk.Toplevel(root)
+    about_window.title("About ZeeMail")
+    # Make geometry slightly taller to accommodate more text and logo
+    about_window.geometry("400x420") # Width x Height
+    about_window.transient(root) # Stays on top of the main window
+    about_window.grab_set()      # Modal: user must interact with this window first
+    about_window.resizable(False, False) # Prevent resizing
+
+    content_frame = ttk.Frame(about_window, padding="15")
+    content_frame.pack(expand=True, fill="both")
+
+    # --- Logo ---
+    # Access the globally loaded app_icon
+    if app_icon:
+        try:
+            logo_label = ttk.Label(content_frame, image=app_icon)
+            logo_label.pack(pady=(0, 10))
+        except tk.TclError: # If app_icon is somehow invalid later
+            ttk.Label(content_frame, text="ZeeMail Logo", font=("Arial", 10, "italic")).pack(pady=(0,10))
+            print("Error displaying app_icon in About dialog, even if loaded.")
+    else:
+        # Fallback text if logo couldn't be loaded or isn't available
+        ttk.Label(content_frame, text="ZeeMail", font=("Arial", 24, "bold")).pack(pady=(0,10))
+
+    # --- App Name and Version ---
+    ttk.Label(content_frame, text="ZeeMail", font=("Arial", 20, "bold")).pack()
+    ttk.Label(content_frame, text="Version 1.0.0 - 'Clear Skies'", font=("Arial", 10, "italic")).pack(pady=(0, 20)) # Added a bit more padding
+
+    # --- Developer Info ---
+    dev_info_text = (
+        "ZeeMail is an email sender , ya?, \n"
+        "built with Python and Tkinter.\n\n"
+        "by: Alireza Rezaei / @alexantSWE\n"
+        "Because sometimes, the simplest tools are the best.\n\n"
+        "Happy emailing!"
+    )
+    ttk.Label(content_frame, text=dev_info_text, justify=tk.CENTER, wraplength=360).pack(pady=10)
+
+    # --- GitHub Link ---
+    github_url = "https://github.com/alexantSWE/zeemail"
+    
+    def open_github_link(event=None): # event=None allows calling it directly too
+        try:
+            webbrowser.open_new_tab(github_url)
+        except Exception as e:
+            print(f"Could not open web browser for {github_url}: {e}")
+            messagebox.showerror("Browser Error", f"Could not open web browser:\n{e}", parent=about_window)
+
+    link_frame = ttk.Frame(content_frame) # Frame to hold label and URL
+    link_frame.pack(pady=(10,0))
+
+    ttk.Label(link_frame, text="Find this project on:").pack(side=tk.LEFT, padx=(0,5))
+    link_label = ttk.Label(link_frame, text="GitHub", foreground="blue", cursor="hand2")
+    link_label.pack(side=tk.LEFT)
+    link_label.bind("<Button-1>", open_github_link)
+    
+    # Optional: display the actual URL discreetly
+    # url_display_label = ttk.Label(content_frame, text=f"({github_url})", font=("Arial", 8, "italic"), foreground="gray")
+    # url_display_label.pack(pady=(2,15))
+
+
+    # --- Close Button ---
+    close_button = ttk.Button(content_frame, text="OK", command=about_window.destroy, width=10)
+    close_button.pack(pady=(25, 0)) # More padding at the top before the button
+
+    # Center the Toplevel window on the screen or parent
+    about_window.update_idletasks() # Ensure dimensions are calculated
+    parent_x = root.winfo_x()
+    parent_y = root.winfo_y()
+    parent_width = root.winfo_width()
+    parent_height = root.winfo_height()
+
+    dialog_width = about_window.winfo_width()
+    dialog_height = about_window.winfo_height()
+
+    position_x = parent_x + (parent_width // 2) - (dialog_width // 2)
+    position_y = parent_y + (parent_height // 2) - (dialog_height // 2)
+    
+    about_window.geometry(f"+{position_x}+{position_y}")
+
+
+    about_window.wait_window() # Wait for this window to be closed
+# <<< Make sure nothing else from open_config_window is below this line in this function
+
+    
 
     def on_save_cfg():
         email = email_var_cfg.get()
@@ -304,6 +399,13 @@ def open_config_window():
             return
         if save_config_keyring(email, app_pwd):
             config_window.destroy()
+
+    button_frame = ttk.Frame(config_window)
+    button_frame.pack(pady=10)
+    ttk.Button(button_frame, text="Save to Keyring", command=on_save_cfg).pack(side=tk.LEFT, padx=5)
+    ttk.Button(button_frame, text="Cancel", command=config_window.destroy).pack(side=tk.LEFT, padx=5)
+    email_entry_cfg.focus_set()
+    config_window.wait_window()
 
     button_frame = ttk.Frame(config_window)
     button_frame.pack(pady=10)
@@ -441,10 +543,14 @@ def send_email_action():
         messagebox.showerror("Sending Error", f"An unexpected error occurred: {e}", parent=root)
 
 # --- SET THE WINDOW ICON / LOGO ---
+app_icon = None # Initialize app_icon
 try:
-    app_icon = tk.PhotoImage(file='logo.gif')
-    root.iconphoto(False, app_icon)
-except tk.TclError as e: # More specific error for Tkinter image issues
+    # Attempt to load the icon. If successful, app_icon will be updated.
+    loaded_icon = tk.PhotoImage(file='logo.gif')
+    root.iconphoto(False, loaded_icon)
+    app_icon = loaded_icon # Assign to global app_icon only on success
+    print("App icon loaded successfully.")
+except tk.TclError as e:
     print(f"Could not load logo.gif (TclError): {e}. Ensure it's a valid GIF.")
 except Exception as e:
     print(f"Could not load logo.gif: {e}")
@@ -452,7 +558,6 @@ except Exception as e:
 # --- Load initial configuration ---
 load_config_keyring() # This will also set an initial status_var message
 
-# --- Main Menu ---
 # --- Main Menu ---
 menubar = tk.Menu(root)
 root.config(menu=menubar)
@@ -464,6 +569,11 @@ account_menu.add_command(label="Configure Email Account", command=open_config_wi
 options_menu = tk.Menu(menubar, tearoff=0)
 menubar.add_cascade(label="Options", menu=options_menu)
 options_menu.add_command(label="Settings", command=open_settings_window)
+
+# --- Add Help Menu --- 
+help_menu = tk.Menu(menubar, tearoff=0)
+menubar.add_cascade(label="Help", menu=help_menu)
+help_menu.add_command(label="About ZeeMail", command=show_about_dialog)
 
 file_menu = tk.Menu(menubar, tearoff=0)
 menubar.add_cascade(label="File", menu=file_menu)
