@@ -252,6 +252,15 @@ def check_email_domain_validity(email_address):
 # -------------------------------------------------------------------------
 # UI FUNCTIONS (for Toplevel Windows)
 # -------------------------------------------------------------------------
+def clear_fields_action():
+    """Clears the 'To', 'Subject', and 'Message' fields."""
+    to_entry_var.set("")
+    subject_entry_var.set("")
+    message_text.delete("1.0", tk.END)
+    status_var.set("Fields cleared. Ready for new email.")
+    to_entry.focus_set() # Set focus back to the 'To' field
+    print("Fields cleared.")
+
 
 def open_config_window():
     """Opens a Toplevel window to configure email account using keyring."""
@@ -445,6 +454,7 @@ except Exception as e:
 load_config_keyring() # This will also set an initial status_var message
 
 # --- Main Menu ---
+# --- Main Menu ---
 menubar = tk.Menu(root)
 root.config(menu=menubar)
 
@@ -458,6 +468,9 @@ options_menu.add_command(label="Settings", command=open_settings_window)
 
 file_menu = tk.Menu(menubar, tearoff=0)
 menubar.add_cascade(label="File", menu=file_menu)
+# Add the new command here
+file_menu.add_command(label="Clear Form", command=clear_fields_action)
+file_menu.add_separator() # Optional: visually separates Clear Form from Exit
 file_menu.add_command(label="Exit", command=root.quit)
 
 # --- Configure Grid Layout for Main Window ---
@@ -484,9 +497,15 @@ message_label.grid(row=3, column=0, padx=10, pady=5, sticky="nw") # North-West f
 message_text = scrolledtext.ScrolledText(root, wrap=tk.WORD, width=60, height=15)
 message_text.grid(row=3, column=1, padx=10, pady=5, sticky="nsew") # Stretchy
 
-# Row 4: "Send" Button
-send_button = ttk.Button(root, text="Send Email", command=send_email_action)
-send_button.grid(row=4, column=1, padx=10, pady=10, sticky="e") # Align to the right
+# Row 4: Buttons Frame
+buttons_frame = ttk.Frame(root)
+buttons_frame.grid(row=4, column=1, padx=10, pady=10, sticky="e") # Align the frame to the right
+
+clear_button = ttk.Button(buttons_frame, text="Clear Fields", command=clear_fields_action)
+clear_button.pack(side=tk.LEFT, padx=(0, 5)) # Add some padding between buttons
+
+send_button = ttk.Button(buttons_frame, text="Send Email", command=send_email_action)
+send_button.pack(side=tk.LEFT)
 
 # Row 5: Status Label
 status_label_widget = ttk.Label(root, textvariable=status_var, relief=tk.SUNKEN, anchor="w")
