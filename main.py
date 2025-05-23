@@ -5,6 +5,7 @@ from tkinter import messagebox
 import json
 import smtplib
 from email.mime.text import MIMEText
+import logging
 
 # Keyring and DNS libraries
 import keyring
@@ -19,7 +20,7 @@ except ImportError:
 
 # --- Constants ---
 APP_SETTINGS_FILE = "app_settings.json"  # Stores non-sensitive settings
-SERVICE_NAME = "MyPythonSimpleMailer"    # Unique name for your app in the keyring
+SERVICE_NAME = "zeemailer"    # Unique name for our app in keyring, let's set something that makes sense?
 
 # --- Global Configuration Holder ---
 # Initialize with defaults
@@ -31,6 +32,7 @@ current_config = {
 
 # --- Main Window Setup ---
 root = tk.Tk()
+_is_root_fully_initialized = False # Flag
 root.title("ZeeMail - an email sender")
 # Adjust geometry as needed, slightly taller for menu and status
 root.geometry("600x550")
@@ -62,70 +64,115 @@ def save_app_preferences():
         print(f"Error saving app preferences: {e}")
         return False
 
+# OLD_SERVICE_NAME = "MyPythonSimpleMailer"
+SERVICE_NAME = "zeemailer"  # Your NEW, current service name
+
+# ... (other imports and constants) ...
+
+      
+      
 def load_config_keyring():
     """Loads email and settings from APP_SETTINGS_FILE, and App Password from keyring."""
     global current_config
-    # Reset to defaults before loading to ensure clean state
+    # Reset to defaults
     current_config["email"] = ""
     current_config["app_password"] = None
-    # Only enable check if dnspython is available
     current_config["check_recipient_existence"] = True if DNS_PYTHON_AVAILABLE else False
+    
+    logging.info(f"Attempting to load configuration. Current SERVICE_NAME: '{SERVICE_NAME}'")
 
-
-    settings_file_found = False
+    settings_file_found_and_parsed = False
     try:
         with open(APP_SETTINGS_FILE, "r") as f:
             settings = json.load(f)
-            settings_file_found = True
             if isinstance(settings, dict):
                 current_config["email"] = settings.get("email", "")
-                
-                # Load check_recipient_existence, ensuring it's boolean and respecting DNS_PYTHON_AVAILABLE
                 check_setting = settings.get("check_recipient_existence")
                 if isinstance(check_setting, bool):
                     current_config["check_recipient_existence"] = check_setting and DNS_PYTHON_AVAILABLE
-                elif check_setting is not None and DNS_PYTHON_AVAILABLE:
-                     print(f"Warning: 'check_recipient_existence' in settings is not a boolean. Using default.")
-                # If DNS_PYTHON_AVAILABLE is False, it will remain False
+                elif check_setting is not None and DNS_PYTHON_AVAILABLE: # Handles non-bool existing setting
+                     logging.warning(f"'check_recipient_existence' in {APP_SETTINGS_FILE} is not a boolean. Using default True (if DNS available).")
+                     current_config["check_recipient_existence"] = True # Default to True if DNS available, even if setting was bad
+                # If DNS_PYTHON_AVAILABLE is False, current_config["check_recipient_existence"] remains False
                 
-            else:
-                status_var.set("App settings file has incorrect format.")
+                settings_file_found_and_parsed = True # Mark as successfully parsed
+                logging.info(f"App settings loaded from {APP_SETTINGS_FILE}. Email: '{current_config['email']}', CheckRec: {current_config['check_recipient_existence']}")
+            else: # File exists, but content is not a dict
+                status_var.set("App settings file has incorrect format. Please re-configure.")
+                logging.warning(f"App settings file '{APP_SETTINGS_FILE}' has incorrect format (not a dictionary).")
     except FileNotFoundError:
+        # This is an expected condition on first run or if file is deleted
         status_var.set("App settings not found. Please configure your account.")
+        logging.info(f"App settings file '{APP_SETTINGS_FILE}' not found. This is normal for a first run.")
+        # No further action needed here, defaults will be used, settings_file_found_and_parsed remains False
     except json.JSONDecodeError:
+        # File exists but is not valid JSON
         status_var.set("Error: App settings file is corrupted. Please re-configure.")
+        logging.warning(f"Failed to decode JSON from app settings file: {APP_SETTINGS_FILE}", exc_info=True)
+        # settings_file_found_and_parsed remains False
     except Exception as e:
+        # Other unexpected errors during file reading/parsing
         status_var.set(f"Error loading app settings: {e}")
+        logging.error(f"Unexpected error loading app settings from {APP_SETTINGS_FILE}: {e}", exc_info=True)
+        # settings_file_found_and_parsed remains False
 
-    # If email was identified from settings, try to get password from keyring
-    if current_config["email"]:
+    # --- Keyring part ---
+    if current_config["email"]: # Only try keyring if we have an email (from settings file or potentially old config)
+        logging.info(f"Attempting to retrieve password from keyring for email '{current_config['email']}' using service '{SERVICE_NAME}'.")
         try:
             retrieved_password = keyring.get_password(SERVICE_NAME, current_config["email"])
+            
             if retrieved_password:
                 current_config["app_password"] = retrieved_password
                 status_var.set(
                     f"Configured for {current_config['email']} (Pwd from keyring, Check Rec: {current_config['check_recipient_existence']})"
                 )
-                return True # Successfully loaded email and password
-            else:
-                status_var.set(f"Email {current_config['email']} known, App Password not in keyring. Please configure.")
+                logging.info(f"Password successfully retrieved from keyring for {current_config['email']}.")
+                return True 
+            else: # Password not found in keyring for this email/service combination
+                logging.warning(f"No password found in keyring for '{current_config['email']}' under service '{SERVICE_NAME}'.")
+                status_var.set(f"App Password for {current_config['email']} not in keyring. Please re-configure.")
+                if _is_root_fully_initialized: # Only show messagebox if root is ready
+                    messagebox.showwarning(
+                        "Re-configuration Needed",
+                        f"The App Password for '{current_config['email']}' was not found in your system keyring "
+                        f"for this application ('{SERVICE_NAME}').\n\n"
+                        "Please re-configure your account.",
+                        parent=root
+                    )
+                else:
+                    print(f"CRITICAL STARTUP INFO: App Password for {current_config['email']} not in keyring. Please re-configure via UI.")
+
+
         except keyring.errors.NoKeyringError:
-            status_var.set("Error: Keyring backend not found. Cannot securely load password.")
-            messagebox.showwarning("Keyring Error", "No system keyring backend found. Cannot securely load password.", parent=root)
-        except Exception as e:
+            status_var.set("Error: Keyring backend not found. Cannot securely load/store password.")
+            logging.error("Keyring backend not found during password retrieval.", exc_info=True)
+            if _is_root_fully_initialized:
+                messagebox.showerror("Keyring Error", "No system keyring backend found. Please ensure one is installed and configured.", parent=root)
+            else:
+                print("CRITICAL STARTUP ERROR: Keyring backend not found. Check logs.")
+        except Exception as e: 
             status_var.set(f"Error retrieving password from keyring: {e}")
-            messagebox.showwarning("Keyring Warning", f"Could not retrieve password from keyring: {e}", parent=root)
-    elif settings_file_found and not current_config["email"]: # File exists but no email
-        status_var.set("App settings found but no email. Please configure.")
+            logging.error(f"Unexpected error retrieving password from keyring: {e}", exc_info=True)
+            if _is_root_fully_initialized: 
+                messagebox.showerror("Keyring Error", f"Could not retrieve password from keyring: {e}", parent=root)
+            else:
+                print(f"CRITICAL STARTUP ERROR: Keyring failed: {e}. Check logs and status bar.")
     
-    # If we reach here, full config (email + password) might not be complete
-    # Update status if only partial info or error
-    if not current_config.get("app_password"): # If password wasn't loaded
-        if current_config.get("email"):
-            status_var.set(f"Ready for {current_config['email']}. App Password needed from keyring.")
-        elif not status_var.get(): # If status_var wasn't set by an earlier error
-             status_var.set("Ready. Please configure your email account.")
+    elif settings_file_found_and_parsed and not current_config["email"]:
+        # Settings file was read, but it didn't contain an email address.
+        status_var.set("App settings found but no email specified. Please configure.")
+        logging.info(f"App settings file '{APP_SETTINGS_FILE}' loaded, but no 'email' key found or email is empty.")
+    
+    # If not returned True by now, full config is not complete.
+    # Set a general status if no specific error message has already been set.
+    if not status_var.get(): 
+        status_var.set("Ready. Please configure your email account.")
+    
     return False
+
+    
+    
 
 
 def save_config_keyring(email, app_password):
@@ -446,8 +493,9 @@ status_label_widget = ttk.Label(root, textvariable=status_var, relief=tk.SUNKEN,
 status_label_widget.grid(row=5, column=0, columnspan=2, padx=10, pady=(5,10), sticky="ew")
 
 
-# --- Initial Focus ---
 to_entry.focus_set()
+_is_root_fully_initialized = True # Set the flag just before starting the main loop
 
-# --- Start the GUI Event Loop ---
+logging.info("Starting Tkinter main event loop.")
 root.mainloop()
+logging.info("Application event loop finished.") # This logs when mainloop exits
