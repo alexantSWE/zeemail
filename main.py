@@ -31,7 +31,7 @@ current_config = {
 
 # --- Main Window Setup ---
 root = tk.Tk()
-root.title("Simple Email Sender")
+root.title("ZeeMail - an email sender")
 # Adjust geometry as needed, slightly taller for menu and status
 root.geometry("600x550")
 
