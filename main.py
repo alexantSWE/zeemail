@@ -385,7 +385,8 @@ def show_about_dialog():
 
     about_window.wait_window() # Wait for this window to be closed
 # <<< Make sure nothing else from open_config_window is below this line in this function
-
+# are we touching some duplicated code? is it a copy-paste thing? I don't know
+# I suppose I should have split into multiple modules instead of one main.py
     
 
     def on_save_cfg():
