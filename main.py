@@ -135,7 +135,9 @@ def send_email_action():
 
     to_email = to_entry_var.get()
     subject = subject_entry_var.get()
-    message_body = message_text.get("1.0", tk.END - "1c")
+    message_body = message_text.get("1.0", f"{tk.END}-1c")
+    # OR this also works:
+    # message_body = message_text.get("1.0", "end-1c")
 
     if not to_email or "@" not in to_email:
         status_var.set("Error: Please enter a valid 'To' email address.")
