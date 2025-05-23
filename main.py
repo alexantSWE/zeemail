@@ -69,8 +69,7 @@ SERVICE_NAME = "zeemailer"  # Your NEW, current service name
 
 
       
-# when we changed the service name, things haven't been the same, now everything has gone to fuck due to 
-# -- a simple service_name change... aaaaaaaaaaaaaaaaaaaa
+# we did it, everything is daijoubu now
 def load_config_keyring():
     """Loads email and settings from APP_SETTINGS_FILE, and App Password from keyring."""
     global current_config
