@@ -387,7 +387,9 @@ def show_about_dialog():
 # <<< Make sure nothing else from open_config_window is below this line in this function
 # are we touching some duplicated code? is it a copy-paste thing? I don't know
 # I suppose I should have split into multiple modules instead of one main.py
-    
+
+# we'll leave it at this for now, since that warning isn't causing any serious error.. but for sake of clarity
+# TODO : FIXME : prevent the "moving error/warning from happening anywhere
 
     def on_save_cfg():
         email = email_var_cfg.get()
