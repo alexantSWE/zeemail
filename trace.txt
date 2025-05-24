@@ -1,0 +1,9 @@
+Exception in Tkinter callback
+Traceback (most recent call last):
+  File "/usr/lib/python3.13/tkinter/__init__.py", line 2068, in __call__
+    return self.func(*args)
+           ~~~~~~~~~^^^^^^^
+  File "/home/el/Documents/proj/zeemail/main.py", line 406, in show_about_dialog
+    button_frame = ttk.Frame(config_window)
+                             ^^^^^^^^^^^^^
+NameError: name 'config_window' is not defined. Did you mean: 'open_config_window'?
