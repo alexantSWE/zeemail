@@ -5,7 +5,8 @@
 
 ZeeMail is a simple desktop application designed for one thing: sending emails quickly and reliably. It securely stores your credentials in your system's native keychain and provides a clean, distraction-free interface. It serves as a great example of a modern, object-oriented Tkinter application.
 
-![alt text](screenshot.png "main window")
+![alt text](screenshot.png "a screenshot of main window of ZeeMail")
+
 ---
 
 ## ✨ Features
@@ -24,7 +25,7 @@ ZeeMail is a simple desktop application designed for one thing: sending emails q
 *   **A configured system keyring backend**:
     *   **Windows**: The Credential Manager is built-in.
     *   **macOS**: The Keychain is built-in.
-    *   **Linux**: You need to have `secret-service` or `kwallet` installed and running. For example, on Debian/Ubuntu: `sudo apt-get install libsecret-1-0 gir1.2-secret-1`.
+    *   **Linux**: You need to have `secret-service` or `kwallet` installed. For example, on Debian/Ubuntu: `sudo apt-get install libsecret-1-0 gir1.2-secret-1`. Arch users may need to install additional packages (see installation notes below).
 
 ## 🚀 Installation & Setup
 
@@ -37,6 +38,7 @@ cd zeemail
 ```
 
 **2. Create and activate a virtual environment (recommended):**
+This isolates the project's dependencies from your system's Python packages, which is the safest approach.
 *   On macOS/Linux:
     ```bash
     python3 -m venv venv
@@ -58,6 +60,25 @@ Then, run the installation command:
 ```bash
 pip install -r requirements.txt
 ```
+
+<details>
+<summary><b>A Note for Arch Linux Users</b></summary>
+
+While it's common to use `pacman` to install Python packages system-wide (e.g., `sudo pacman -S python-keyring`), this project **strongly recommends using a virtual environment** as described above. This prevents any potential conflicts with system packages and ensures the application runs with the exact dependency versions it was tested with.
+
+To follow the virtual environment setup, you may first need to install the necessary tools using `pacman`:
+
+```bash
+# Install pip and the venv module
+sudo pacman -S python-pip python-venv
+
+# Install the backend for the keyring library
+sudo pacman -S libsecret
+```
+
+Once these are installed, you can proceed with creating the virtual environment (`python -m venv venv`) and installing the requirements with `pip` as described in the main instructions. **`pip` is the correct tool to use *inside* an activated virtual environment.**
+
+</details>
 
 **4. Run the Application:**
 ```bash
@@ -89,7 +110,8 @@ The project is organized with a clear separation of concerns:
 *   **`ConfigManager` Class**: Handles all logic for loading and saving settings. It reads/writes `app_settings.json` for non-sensitive data and interacts with `keyring` for secure password storage.
 *   **`EmailSender` Class**: Contains the logic for connecting to an SMTP server via `smtplib` to send emails and for performing DNS checks with `dnspython`.
 *   `logo.gif`: The application icon.
-*   `app_settings.json`: Automatically created to store non-sensitive settings like your email address and SMTP server configuration. **(Do not commit this file if you use a public repository)**.
+*   `screenshot.png`: The screenshot displayed in this README.
+*   `app_settings.json`: Automatically created to store non-sensitive settings like your email address and SMTP server configuration. **(This should be added to `.gitignore`)**.
 *   `requirements.txt`: Lists the Python package dependencies for the project.
 
 ## 📜 License
