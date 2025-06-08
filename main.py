@@ -1,14 +1,13 @@
 import tkinter as tk
-from tkinter import ttk
-from tkinter import scrolledtext
-from tkinter import messagebox
+from tkinter import ttk, scrolledtext, messagebox
 import json
 import smtplib
 from email.mime.text import MIMEText
 import logging
 import webbrowser
+from typing import Optional, Dict, Any
 
-# Keyring and DNS libraries
+# Keyring and DNS libraries (optional dependencies)
 import keyring
 import keyring.errors
 try:
@@ -17,616 +16,381 @@ try:
     DNS_PYTHON_AVAILABLE = True
 except ImportError:
     DNS_PYTHON_AVAILABLE = False
-    print("Warning: dnspython library not found. Recipient email domain check will be disabled.")
 
 # --- Constants ---
-APP_SETTINGS_FILE = "app_settings.json"  # Stores non-sensitive settings
-SERVICE_NAME = "zeemailer"    # Unique name for our app in keyring, let's set something that makes sense?
+APP_SETTINGS_FILE = "app_settings.json"
+SERVICE_NAME = "zeemailer" # Unique name for the app in the system keyring
 
-# --- Global Configuration Holder ---
-# Initialize with defaults
-current_config = {
-    "email": "",
-    "app_password": None,  # Loaded from keyring
-    "check_recipient_existence": True if DNS_PYTHON_AVAILABLE else False
-}
-
-# --- Main Window Setup ---
-root = tk.Tk()
-_is_root_fully_initialized = False # Flag
-root.title("ZeeMail - an email sender")
-# Adjust geometry as needed, slightly taller for menu and status
-root.geometry("600x550")
-
-# --- StringVars for Entry Fields ---
-status_var = tk.StringVar()
-to_entry_var = tk.StringVar()
-subject_entry_var = tk.StringVar()
+# --- Basic Logging Configuration ---
+logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 
 # -------------------------------------------------------------------------
-# HELPER & CORE LOGIC FUNCTIONS
+# 1. DATA AND LOGIC CLASSES (Separation of Concerns)
 # -------------------------------------------------------------------------
 
-def save_app_preferences():
-    """Saves non-sensitive application preferences to APP_SETTINGS_FILE."""
-    global current_config
-    prefs_to_save = {
-        "email": current_config.get("email", ""),
-        "check_recipient_existence": current_config.get("check_recipient_existence", True if DNS_PYTHON_AVAILABLE else False)
-        # Add other non-sensitive settings here in the future
-    }
-    try:
-        with open(APP_SETTINGS_FILE, "w") as f:
-            json.dump(prefs_to_save, f, indent=4)
-        print("App preferences saved.")
-        return True
-    except Exception as e:
-        messagebox.showerror("Error", f"Could not save app preferences: {e}", parent=root)
-        print(f"Error saving app preferences: {e}")
-        return False
+class ConfigManager:
+    """Manages loading and saving of application configuration."""
+    def __init__(self, settings_file: str, service_name: str):
+        self.settings_file = settings_file
+        self.service_name = service_name
+        self.config: Dict[str, Any] = self._get_default_config()
 
-# OLD_SERVICE_NAME = "MyPythonSimpleMailer"
-SERVICE_NAME = "zeemailer"  # Your NEW, current service name
+    def _get_default_config(self) -> Dict[str, Any]:
+        """Returns the default configuration dictionary."""
+        return {
+            "email": "",
+            "app_password": None, # Loaded from keyring
+            "smtp_server": "smtp.gmail.com",
+            "smtp_port": 465,
+            "check_recipient_domain": DNS_PYTHON_AVAILABLE,
+        }
 
-
-      
-# we did it, everything is daijoubu now
-def load_config_keyring():
-    """Loads email and settings from APP_SETTINGS_FILE, and App Password from keyring."""
-    global current_config
-    # Reset to defaults
-    current_config["email"] = ""
-    current_config["app_password"] = None
-    current_config["check_recipient_existence"] = True if DNS_PYTHON_AVAILABLE else False
-    
-    logging.info(f"Attempting to load configuration. Current SERVICE_NAME: '{SERVICE_NAME}'")
-
-    settings_file_found_and_parsed = False
-    try:
-        with open(APP_SETTINGS_FILE, "r") as f:
-            settings = json.load(f)
-            if isinstance(settings, dict):
-                current_config["email"] = settings.get("email", "")
-                check_setting = settings.get("check_recipient_existence")
-                if isinstance(check_setting, bool):
-                    current_config["check_recipient_existence"] = check_setting and DNS_PYTHON_AVAILABLE
-                elif check_setting is not None and DNS_PYTHON_AVAILABLE: # Handles non-bool existing setting
-                     logging.warning(f"'check_recipient_existence' in {APP_SETTINGS_FILE} is not a boolean. Using default True (if DNS available).")
-                     current_config["check_recipient_existence"] = True # Default to True if DNS available, even if setting was bad
-                # If DNS_PYTHON_AVAILABLE is False, current_config["check_recipient_existence"] remains False
-                
-                settings_file_found_and_parsed = True # Mark as successfully parsed
-                logging.info(f"App settings loaded from {APP_SETTINGS_FILE}. Email: '{current_config['email']}', CheckRec: {current_config['check_recipient_existence']}")
-            else: # File exists, but content is not a dict
-                status_var.set("App settings file has incorrect format. Please re-configure.")
-                logging.warning(f"App settings file '{APP_SETTINGS_FILE}' has incorrect format (not a dictionary).")
-    except FileNotFoundError:
-        # This is an expected condition on first run or if file is deleted
-        status_var.set("App settings not found. Please configure your account.")
-        logging.info(f"App settings file '{APP_SETTINGS_FILE}' not found. This is normal for a first run.")
-        # No further action needed here, defaults will be used, settings_file_found_and_parsed remains False
-    except json.JSONDecodeError:
-        # File exists but is not valid JSON
-        status_var.set("Error: App settings file is corrupted. Please re-configure.")
-        logging.warning(f"Failed to decode JSON from app settings file: {APP_SETTINGS_FILE}", exc_info=True)
-        # settings_file_found_and_parsed remains False
-    except Exception as e:
-        # Other unexpected errors during file reading/parsing
-        status_var.set(f"Error loading app settings: {e}")
-        logging.error(f"Unexpected error loading app settings from {APP_SETTINGS_FILE}: {e}", exc_info=True)
-        # settings_file_found_and_parsed remains False
-
-    # --- Keyring part ---
-    if current_config["email"]: # Only try keyring if we have an email (from settings file or potentially old config)
-        logging.info(f"Attempting to retrieve password from keyring for email '{current_config['email']}' using service '{SERVICE_NAME}'.")
+    def load_configuration(self) -> None:
+        """Loads settings from file and password from keyring."""
+        self.config = self._get_default_config()
         try:
-            retrieved_password = keyring.get_password(SERVICE_NAME, current_config["email"])
-            
-            if retrieved_password:
-                current_config["app_password"] = retrieved_password
-                status_var.set(
-                    f"Configured for {current_config['email']} (Pwd from keyring, Check Rec: {current_config['check_recipient_existence']})"
-                )
-                logging.info(f"Password successfully retrieved from keyring for {current_config['email']}.")
-                return True 
-            else: # Password not found in keyring for this email/service combination
-                logging.warning(f"No password found in keyring for '{current_config['email']}' under service '{SERVICE_NAME}'.")
-                status_var.set(f"App Password for {current_config['email']} not in keyring. Please re-configure.")
-                if _is_root_fully_initialized: # Only show messagebox if root is ready
-                    messagebox.showwarning(
-                        "Re-configuration Needed",
-                        f"The App Password for '{current_config['email']}' was not found in your system keyring "
-                        f"for this application ('{SERVICE_NAME}').\n\n"
-                        "Please re-configure your account.",
-                        parent=root
-                    )
+            with open(self.settings_file, "r") as f:
+                settings = json.load(f)
+                self.config.update(settings)
+                # Ensure boolean setting is respected and dependent on dnspython
+                if not DNS_PYTHON_AVAILABLE:
+                    self.config["check_recipient_domain"] = False
+                logging.info(f"Settings loaded from {self.settings_file}")
+        except (FileNotFoundError, json.JSONDecodeError) as e:
+            logging.warning(f"Could not load settings file: {e}. Using defaults.")
+
+        # Load password from keyring if an email is configured
+        if self.config.get("email"):
+            try:
+                password = keyring.get_password(self.service_name, self.config["email"])
+                if password:
+                    self.config["app_password"] = password
+                    logging.info(f"Password retrieved from keyring for {self.config['email']}.")
                 else:
-                    print(f"CRITICAL STARTUP INFO: App Password for {current_config['email']} not in keyring. Please re-configure via UI.")
+                    logging.warning(f"No password found in keyring for {self.config['email']}.")
+            except keyring.errors.NoKeyringError:
+                logging.error("Keyring backend not found. Cannot securely load password.")
+                raise # Re-raise to be handled by the UI
+            except Exception as e:
+                logging.error(f"Error retrieving password from keyring: {e}", exc_info=True)
+                raise # Re-raise to be handled by the UI
 
-
-        except keyring.errors.NoKeyringError:
-            status_var.set("Error: Keyring backend not found. Cannot securely load/store password.")
-            logging.error("Keyring backend not found during password retrieval.", exc_info=True)
-            if _is_root_fully_initialized:
-                messagebox.showerror("Keyring Error", "No system keyring backend found. Please ensure one is installed and configured.", parent=root)
-            else:
-                print("CRITICAL STARTUP ERROR: Keyring backend not found. Check logs.")
-        except Exception as e: 
-            status_var.set(f"Error retrieving password from keyring: {e}")
-            logging.error(f"Unexpected error retrieving password from keyring: {e}", exc_info=True)
-            if _is_root_fully_initialized: 
-                messagebox.showerror("Keyring Error", f"Could not retrieve password from keyring: {e}", parent=root)
-            else:
-                print(f"CRITICAL STARTUP ERROR: Keyring failed: {e}. Check logs and status bar.")
-    
-    elif settings_file_found_and_parsed and not current_config["email"]:
-        # Settings file was read, but it didn't contain an email address.
-        status_var.set("App settings found but no email specified. Please configure.")
-        logging.info(f"App settings file '{APP_SETTINGS_FILE}' loaded, but no 'email' key found or email is empty.")
-    
-    # If not returned True by now, full config is not complete.
-    # Set a general status if no specific error message has already been set.
-    if not status_var.get(): 
-        status_var.set("Ready. Please configure your email account.")
-    
-    return False
-
-    
-    
-
-
-def save_config_keyring(email, app_password):
-    """Saves email to APP_SETTINGS_FILE (via save_app_preferences) and App Password to keyring."""
-    global current_config
-    
-    # Update current_config email before saving preferences
-    current_config["email"] = email
-    
-    if not save_app_preferences(): # This saves email and check_recipient_existence
-        # Error message already shown by save_app_preferences
-        return False
-
-    # Save password to keyring
-    try:
-        keyring.set_password(SERVICE_NAME, email, app_password)
-        current_config["app_password"] = app_password # Update in-memory
-        status_var.set(f"Config saved for {email} (Pwd in keyring, Check Rec: {current_config['check_recipient_existence']})")
-        messagebox.showinfo("Configuration Saved", "Email account configuration has been saved securely.", parent=root)
-        return True
-    except keyring.errors.NoKeyringError:
-        status_var.set("Error: Keyring backend not found. Password NOT saved securely.")
-        messagebox.showerror("Keyring Error", "No system keyring. Password NOT saved securely. Install/configure a keyring.", parent=root)
-    except keyring.errors.PasswordSetError:
-        status_var.set("Error: Could not set password in keyring.")
-        messagebox.showerror("Keyring Error", "Failed to set the password in the system keyring.", parent=root)
-    except Exception as e:
-        status_var.set(f"Error saving password to keyring: {e}")
-        messagebox.showerror("Error", f"Could not save password to keyring: {e}", parent=root)
-    return False
-
-def check_email_domain_validity(email_address):
-    """Checks for MX records (and A as fallback) for the email's domain."""
-    if not DNS_PYTHON_AVAILABLE:
-        print("DNS check skipped: dnspython library not available.")
-        return True # Skip check if library is missing, assume valid
-
-    if not email_address or "@" not in email_address:
-        return False 
-
-    domain = email_address.split('@')[-1]
-    if not domain:
-        return False
-
-    try:
-        mx_records = dns.resolver.resolve(domain, 'MX')
-        if mx_records:
-            print(f"MX records found for {domain}: {[r.exchange.to_text() for r in mx_records]}")
-            return True
-    except dns.resolver.NXDOMAIN:
-        print(f"Domain {domain} does not exist (NXDOMAIN).")
-        return False
-    except dns.resolver.NoAnswer:
-        print(f"No MX records found for {domain}. Trying A record...")
-    except dns.exception.Timeout:
-        print(f"DNS query for MX for {domain} timed out.")
-        return False 
-    except Exception as e:
-        print(f"Error resolving MX for {domain}: {e}")
-
-    try:
-        a_records = dns.resolver.resolve(domain, 'A')
-        if a_records:
-            print(f"A records found for {domain} (fallback): {[r.to_text() for r in a_records]}")
-            return True
-    except (dns.resolver.NXDOMAIN, dns.resolver.NoAnswer):
-        print(f"No A records found for {domain} either.")
-        return False
-    except dns.exception.Timeout:
-        print(f"DNS query for A for {domain} timed out.")
-        return False
-    except Exception as e:
-        print(f"Error resolving A for {domain}: {e}")
-        return False
-    return False
-
-# -------------------------------------------------------------------------
-# UI FUNCTIONS (for Toplevel Windows)
-# -------------------------------------------------------------------------
-def clear_fields_action():
-    """Clears the 'To', 'Subject', and 'Message' fields."""
-    to_entry_var.set("")
-    subject_entry_var.set("")
-    message_text.delete("1.0", tk.END)
-    status_var.set("Fields cleared. Ready for new email.")
-    to_entry.focus_set() # Set focus back to the 'To' field
-    print("Fields cleared.")
-
-
-def open_config_window():
-    """Opens a Toplevel window to configure email account using keyring.""" # Restored docstring
-    config_window = tk.Toplevel(root)
-    config_window.title("Configure Email Account (Secure)")
-    config_window.geometry("450x350")
-    config_window.transient(root)
-    config_window.grab_set()
-
-    # --- MOVED THIS CODE BACK INTO open_config_window ---
-    ttk.Label(config_window, text="Credentials stored in your system's secure keyring.", wraplength=430).pack(pady=5)
-    instructions = (
-        "For Gmail, generate an 'App Password':\n"
-        "1. Google Account > Security > 2-Step Verification (must be ON).\n"
-        "2. Then, App passwords > Select app: Mail, Select device: Other.\n"
-        "3. Name it (e.g., MyPythonMailer) > Generate.\n"
-        "4. Copy the 16-character password (no spaces) below."
-    )
-    ttk.Label(config_window, text=instructions, justify=tk.LEFT, wraplength=430).pack(pady=(5,10))
-
-    form_frame = ttk.Frame(config_window)
-    form_frame.pack(padx=10, pady=5, fill="x", expand=True)
-
-    ttk.Label(form_frame, text="Email Address:").grid(row=0, column=0, sticky="w", pady=2)
-    email_var_cfg = tk.StringVar(value=current_config.get("email", ""))
-    email_entry_cfg = ttk.Entry(form_frame, textvariable=email_var_cfg, width=40)
-    email_entry_cfg.grid(row=0, column=1, sticky="ew", pady=2)
-
-    ttk.Label(form_frame, text="App Password:").grid(row=1, column=0, sticky="w", pady=2)
-    password_var_cfg = tk.StringVar() # For entry only
-    password_entry_cfg = ttk.Entry(form_frame, textvariable=password_var_cfg, show="*", width=40)
-    password_entry_cfg.grid(row=1, column=1, sticky="ew", pady=2)
-    form_frame.columnconfigure(1, weight=1)
-    # --- END OF MOVED INSTRUCTIONS AND FORM FRAME ---
-
-    # --- MOVED THIS CODE BACK INTO open_config_window ---
-    
-    
-      
-def show_about_dialog():
-    # Displays the About ZeeMail dialog window
-    about_window = tk.Toplevel(root)
-    about_window.title("About ZeeMail")
-    # Make geometry slightly taller to accommodate more text and logo
-    about_window.geometry("400x420") # Width x Height
-    about_window.transient(root) # Stays on top of the main window
-    about_window.grab_set()      # Modal: user must interact with this window first
-    about_window.resizable(False, False) # Prevent resizing
-
-    content_frame = ttk.Frame(about_window, padding="15")
-    content_frame.pack(expand=True, fill="both")
-
-    # --- Logo ---
-    # Access the globally loaded app_icon
-    if app_icon:
+    def save_configuration(self, email: str, app_password: str, smtp_server: str, smtp_port: int, check_domain: bool) -> None:
+        """Saves non-sensitive settings to file and password to keyring."""
+        # 1. Save non-sensitive data to JSON file
+        prefs_to_save = {
+            "email": email,
+            "smtp_server": smtp_server,
+            "smtp_port": smtp_port,
+            "check_recipient_domain": check_domain,
+        }
         try:
-            logo_label = ttk.Label(content_frame, image=app_icon)
-            logo_label.pack(pady=(0, 10))
-        except tk.TclError: # If app_icon is somehow invalid later
-            ttk.Label(content_frame, text="ZeeMail Logo", font=("Arial", 10, "italic")).pack(pady=(0,10))
-            print("Error displaying app_icon in About dialog, even if loaded.")
-    else:
-        # Fallback text if logo couldn't be loaded or isn't available
-        ttk.Label(content_frame, text="ZeeMail", font=("Arial", 24, "bold")).pack(pady=(0,10))
-
-    # --- App Name and Version ---
-    ttk.Label(content_frame, text="ZeeMail", font=("Arial", 20, "bold")).pack()
-    ttk.Label(content_frame, text="Version 1.0.0 - 'Clear Skies'", font=("Arial", 10, "italic")).pack(pady=(0, 20)) # Added a bit more padding
-
-    # --- Developer Info ---
-    dev_info_text = (
-        "ZeeMail is an email sender , ya?, \n"
-        "built with Python and Tkinter.\n\n"
-        "by: Alireza Rezaei / @alexantSWE\n"
-        "Because sometimes, the simplest tools are the best.\n\n"
-        "Happy emailing!"
-    )
-    ttk.Label(content_frame, text=dev_info_text, justify=tk.CENTER, wraplength=360).pack(pady=10)
-
-    # --- GitHub Link ---
-    github_url = "https://github.com/alexantSWE/zeemail"
-    
-    def open_github_link(event=None): # event=None allows calling it directly too
-        try:
-            webbrowser.open_new_tab(github_url)
+            with open(self.settings_file, "w") as f:
+                json.dump(prefs_to_save, f, indent=4)
+            logging.info("Application preferences saved.")
         except Exception as e:
-            print(f"Could not open web browser for {github_url}: {e}")
-            messagebox.showerror("Browser Error", f"Could not open web browser:\n{e}", parent=about_window)
+            logging.error(f"Could not save app preferences: {e}", exc_info=True)
+            raise IOError(f"Could not save app preferences: {e}")
 
-    link_frame = ttk.Frame(content_frame) # Frame to hold label and URL
-    link_frame.pack(pady=(10,0))
+        # 2. Save password to keyring
+        try:
+            keyring.set_password(self.service_name, email, app_password)
+            logging.info(f"Password for {email} saved to keyring.")
+        except Exception as e:
+            logging.error(f"Could not save password to keyring: {e}", exc_info=True)
+            raise IOError(f"Could not save password to keyring: {e}")
 
-    ttk.Label(link_frame, text="Find this project on:").pack(side=tk.LEFT, padx=(0,5))
-    link_label = ttk.Label(link_frame, text="GitHub", foreground="blue", cursor="hand2")
-    link_label.pack(side=tk.LEFT)
-    link_label.bind("<Button-1>", open_github_link)
-    
-    # Optional: display the actual URL discreetly
-    # url_display_label = ttk.Label(content_frame, text=f"({github_url})", font=("Arial", 8, "italic"), foreground="gray")
-    # url_display_label.pack(pady=(2,15))
+        # 3. Update in-memory config
+        self.config.update(prefs_to_save)
+        self.config["app_password"] = app_password
+
+class EmailSender:
+    """Handles the logic of sending an email."""
+    @staticmethod
+    def check_domain_validity(email_address: str) -> bool:
+        """Checks for MX records for the email's domain."""
+        if not DNS_PYTHON_AVAILABLE:
+            return True # Skip if library is missing
+        try:
+            domain = email_address.split('@')[-1]
+            dns.resolver.resolve(domain, 'MX')
+            logging.info(f"MX records found for domain '{domain}'.")
+            return True
+        except (dns.resolver.NoAnswer, dns.resolver.NXDOMAIN, dns.exception.Timeout, IndexError):
+            logging.warning(f"MX record check failed for domain of '{email_address}'.")
+            return False
+        except Exception as e:
+            logging.error(f"An unexpected error occurred during DNS check: {e}")
+            return False # Fail safely
+
+    def send(self, sender_cfg: Dict[str, Any], to: str, subject: str, body: str):
+        """Connects to an SMTP server and sends the email."""
+        msg = MIMEText(body)
+        msg['Subject'] = subject
+        msg['From'] = sender_cfg["email"]
+        msg['To'] = to
+
+        server, port = sender_cfg["smtp_server"], sender_cfg["smtp_port"]
+        logging.info(f"Connecting to {server}:{port} to send email.")
+
+        with smtplib.SMTP_SSL(server, port) as smtp_server:
+            smtp_server.login(sender_cfg["email"], sender_cfg["app_password"])
+            smtp_server.sendmail(sender_cfg["email"], to, msg.as_string())
+        logging.info(f"Email sent successfully to {to}.")
 
 
-    # --- Close Button ---
-    close_button = ttk.Button(content_frame, text="OK", command=about_window.destroy, width=10)
-    close_button.pack(pady=(25, 0)) # More padding at the top before the button
+# -------------------------------------------------------------------------
+# 2. UI APPLICATION CLASS (Main Application Logic)
+# -------------------------------------------------------------------------
 
-    # Center the Toplevel window on the screen or parent
-    about_window.update_idletasks() # Ensure dimensions are calculated
-    parent_x = root.winfo_x()
-    parent_y = root.winfo_y()
-    parent_width = root.winfo_width()
-    parent_height = root.winfo_height()
+class EmailApp:
+    """Main application class for the ZeeMail GUI."""
+    def __init__(self, root: tk.Tk):
+        self.root = root
+        self.root.title("ZeeMail - An Email Sender")
+        self.root.geometry("600x550")
+        self.root.protocol("WM_DELETE_WINDOW", self.root.quit)
 
-    dialog_width = about_window.winfo_width()
-    dialog_height = about_window.winfo_height()
+        # Initialize core components
+        self.config_manager = ConfigManager(APP_SETTINGS_FILE, SERVICE_NAME)
+        self.email_sender = EmailSender()
+        self.app_icon = self._load_icon()
 
-    position_x = parent_x + (parent_width // 2) - (dialog_width // 2)
-    position_y = parent_y + (parent_height // 2) - (dialog_height // 2)
-    
-    about_window.geometry(f"+{position_x}+{position_y}")
+        # UI variables
+        self.status_var = tk.StringVar(value="Initializing...")
+        self.to_var = tk.StringVar()
+        self.subject_var = tk.StringVar()
 
+        self._create_widgets()
+        self._load_initial_config()
 
-    about_window.wait_window() # Wait for this window to be closed
-# <<< Make sure nothing else from open_config_window is below this line in this function
-# are we touching some duplicated code? is it a copy-paste thing? I don't know
-# I suppose I should have split into multiple modules instead of one main.py
+    def _load_icon(self) -> Optional[tk.PhotoImage]:
+        """Loads the application icon."""
+        try:
+            icon = tk.PhotoImage(file='logo.gif')
+            self.root.iconphoto(False, icon)
+            logging.info("App icon 'logo.gif' loaded successfully.")
+            return icon
+        except tk.TclError:
+            logging.warning("Could not load 'logo.gif'. Ensure it's a valid GIF file.")
+        return None
 
-# we'll leave it at this for now, since that warning isn't causing any serious error.. but for sake of clarity
-# TODO : FIXME : prevent the "moving error/warning from happening anywhere
+    def _load_initial_config(self):
+        """Tries to load configuration on startup and updates the status."""
+        try:
+            self.config_manager.load_configuration()
+            email = self.config_manager.config.get("email")
+            password = self.config_manager.config.get("app_password")
+            if email and password:
+                self.status_var.set(f"Ready. Configured for {email}.")
+            elif email:
+                self.status_var.set(f"Config for {email} found, but password missing from keyring.")
+                messagebox.showwarning(
+                    "Password Missing",
+                    f"Password for {email} not found in your system's keyring. Please re-configure.",
+                    parent=self.root
+                )
+            else:
+                self.status_var.set("Ready. Please configure your email account via the 'Account' menu.")
+        except Exception as e:
+            self.status_var.set("Error loading configuration. See logs.")
+            messagebox.showerror("Configuration Error", f"An error occurred while loading settings: {e}", parent=self.root)
 
-    def on_save_cfg():
-        email = email_var_cfg.get()
-        app_pwd = password_var_cfg.get()
-        if not email or "@" not in email:
-            messagebox.showerror("Input Error", "Please enter a valid email address.", parent=config_window)
-            return
-        if not app_pwd:
-            messagebox.showerror("Input Error", "Please enter the App Password.", parent=config_window)
-            return
-        if save_config_keyring(email, app_pwd):
-            config_window.destroy()
+    def _create_widgets(self):
+        """Creates and lays out all the widgets in the main window."""
+        self.root.columnconfigure(1, weight=1)
+        self.root.rowconfigure(2, weight=1) # Row for the message body
 
-    button_frame = ttk.Frame(config_window)
-    button_frame.pack(pady=10)
-    ttk.Button(button_frame, text="Save to Keyring", command=on_save_cfg).pack(side=tk.LEFT, padx=5)
-    ttk.Button(button_frame, text="Cancel", command=config_window.destroy).pack(side=tk.LEFT, padx=5)
-    email_entry_cfg.focus_set()
-    config_window.wait_window()
+        # --- Menu Bar ---
+        menubar = tk.Menu(self.root)
+        self.root.config(menu=menubar)
 
-    button_frame = ttk.Frame(config_window)
-    button_frame.pack(pady=10)
-    ttk.Button(button_frame, text="Save to Keyring", command=on_save_cfg).pack(side=tk.LEFT, padx=5)
-    ttk.Button(button_frame, text="Cancel", command=config_window.destroy).pack(side=tk.LEFT, padx=5)
-    email_entry_cfg.focus_set()
-    config_window.wait_window()
-
-def open_settings_window():
-    """Opens a Toplevel window for application settings."""
-    settings_window = tk.Toplevel(root)
-    settings_window.title("Application Settings")
-    settings_window.geometry("420x200") # Ensure this is large enough
-    settings_window.transient(root)
-    settings_window.grab_set()
-
-    # This LabelFrame is the main container for settings inside the window
-    settings_frame = ttk.LabelFrame(settings_window, text="Email Sending", padding="10")
-    # Make sure settings_frame itself is packed into settings_window
-    settings_frame.pack(padx=10, pady=10, fill="both", expand=True) # Use fill="both" and expand=True
-
-    check_recipient_var_settings = tk.BooleanVar(value=current_config.get("check_recipient_existence", True))
-    
-    check_button_state = tk.NORMAL if DNS_PYTHON_AVAILABLE else tk.DISABLED
-    
-    # Manually add a newline for better wrapping in the checkbutton
-    check_button_text_line1 = "Check recipient email domain existence before sending"
-    check_button_text_line2 = "(via DNS MX records)"
-    if not DNS_PYTHON_AVAILABLE:
-        check_button_text_line2 += "\n(dnspython library not found)" # Add another newline for clarity
-    
-    check_button_full_text = f"{check_button_text_line1}\n{check_button_text_line2}"
-
-    check_button = ttk.Checkbutton(
-        settings_frame, # Parent is settings_frame
-        text=check_button_full_text,
-        variable=check_recipient_var_settings,
-        state=check_button_state
-    )
-    # Make sure check_button is packed into settings_frame
-    check_button.pack(pady=5, padx=5, anchor="w") # Added padx
-
-    def on_save_app_settings():
-        global current_config
-        if DNS_PYTHON_AVAILABLE:
-            current_config["check_recipient_existence"] = check_recipient_var_settings.get()
+        # File Menu
+        file_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="File", menu=file_menu)
+        file_menu.add_command(label="Clear Form", command=self._clear_fields)
+        file_menu.add_separator()
+        file_menu.add_command(label="Exit", command=self.root.quit)
         
-        if save_app_preferences():
-            status_var.set(f"Settings updated. Check Recipient: {current_config['check_recipient_existence']}")
-            messagebox.showinfo("Settings Saved", "Application settings have been saved.", parent=settings_window)
-            settings_window.destroy()
+        # Account Menu
+        account_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Account", menu=account_menu)
+        account_menu.add_command(label="Configure...", command=self._open_config_window)
 
-    # Frame for buttons, parented to settings_window
-    button_frame = ttk.Frame(settings_window)
-    button_frame.pack(pady=(0,10), padx=10, fill="x") # Pack it below the settings_frame
+        # Help Menu
+        help_menu = tk.Menu(menubar, tearoff=0)
+        menubar.add_cascade(label="Help", menu=help_menu)
+        help_menu.add_command(label="About ZeeMail", command=self._show_about_dialog)
 
-    ttk.Button(button_frame, text="Save Settings", command=on_save_app_settings).pack(side=tk.RIGHT, padx=5) # Align right
-    ttk.Button(button_frame, text="Cancel", command=settings_window.destroy).pack(side=tk.RIGHT) # Align right
+        # --- Main Frame ---
+        main_frame = ttk.Frame(self.root, padding="10")
+        main_frame.grid(row=0, column=0, columnspan=2, sticky="nsew")
+        main_frame.columnconfigure(1, weight=1)
+        main_frame.rowconfigure(2, weight=1)
 
-    settings_window.wait_window()
+        # Widgets
+        ttk.Label(main_frame, text="To:").grid(row=0, column=0, sticky="w", pady=2)
+        to_entry = ttk.Entry(main_frame, textvariable=self.to_var)
+        to_entry.grid(row=0, column=1, sticky="ew", pady=2)
+        to_entry.focus_set()
 
-# -------------------------------------------------------------------------
-# MAIN ACTION FUNCTION (SEND EMAIL)
-# -------------------------------------------------------------------------
+        ttk.Label(main_frame, text="Subject:").grid(row=1, column=0, sticky="w", pady=2)
+        ttk.Entry(main_frame, textvariable=self.subject_var).grid(row=1, column=1, sticky="ew", pady=2)
 
-def send_email_action():
-    if not current_config.get("email") or not current_config.get("app_password"):
-        status_var.set("Error: Email account not fully configured.")
-        messagebox.showerror("Config Error", "Email account not configured or password not loaded. Use 'Account > Configure'.", parent=root)
-        load_config_keyring() # Attempt to reload
-        return
+        ttk.Label(main_frame, text="Message:").grid(row=2, column=0, sticky="nw", pady=2)
+        self.message_text = scrolledtext.ScrolledText(main_frame, wrap=tk.WORD, height=15)
+        self.message_text.grid(row=2, column=1, sticky="nsew", pady=2)
 
-    sender_email = current_config["email"]
-    app_password = current_config["app_password"]
-    to_email = to_entry_var.get()
-    subject = subject_entry_var.get()
-    message_body = message_text.get("1.0", f"{tk.END}-1c") # Correct way to get text
+        # Button Frame
+        button_frame = ttk.Frame(main_frame)
+        button_frame.grid(row=3, column=1, pady=(10, 0), sticky="e")
+        ttk.Button(button_frame, text="Clear", command=self._clear_fields).pack(side=tk.LEFT, padx=5)
+        ttk.Button(button_frame, text="Send Email", command=self._send_email).pack(side=tk.LEFT)
 
-    if not to_email or "@" not in to_email:
-        messagebox.showwarning("Input Error", "Valid 'To' email required.", parent=root)
-        return
-    if not subject:
-        messagebox.showwarning("Input Error", "Subject required.", parent=root)
-        return
-    if not message_body:
-        messagebox.showwarning("Input Error", "Message body required.", parent=root)
-        return
+        # Status Bar
+        status_bar = ttk.Label(self.root, textvariable=self.status_var, relief=tk.SUNKEN, anchor="w", padding=5)
+        status_bar.grid(row=1, column=0, columnspan=2, sticky="ew")
 
-    # Recipient Email Domain Existence Check
-    if DNS_PYTHON_AVAILABLE and current_config.get("check_recipient_existence", False):
-        status_var.set(f"Checking domain for {to_email}...")
-        root.update_idletasks()
-        if not check_email_domain_validity(to_email):
-            proceed = messagebox.askyesno(
-                "Domain Validity Warning",
-                f"The domain for '{to_email}' might not exist or accept emails.\n"
-                "Proceed with sending?",
-                parent=root
-            )
-            if not proceed:
-                status_var.set("Sending cancelled due to domain check.")
+    def _clear_fields(self):
+        """Clears the input fields."""
+        self.to_var.set("")
+        self.subject_var.set("")
+        self.message_text.delete("1.0", tk.END)
+        self.status_var.set("Fields cleared.")
+        logging.info("Input fields cleared by user.")
+
+    def _send_email(self):
+        """Validates input and calls the EmailSender."""
+        cfg = self.config_manager.config
+        if not cfg.get("email") or not cfg.get("app_password"):
+            messagebox.showerror("Configuration Error", "Email account is not fully configured.", parent=self.root)
+            self.status_var.set("Configuration incomplete. Please use 'Account > Configure'.")
+            return
+
+        to_email = self.to_var.get().strip()
+        subject = self.subject_var.get()
+        body = self.message_text.get("1.0", tk.END).strip()
+
+        if not all([to_email, subject, body]):
+            messagebox.showwarning("Input Error", "To, Subject, and Message fields cannot be empty.", parent=self.root)
+            return
+
+        # Optional: Domain check
+        if cfg.get("check_recipient_domain") and not self.email_sender.check_domain_validity(to_email):
+            if not messagebox.askyesno("Domain Warning", f"The domain for '{to_email}' might not be valid. Send anyway?", parent=self.root):
+                self.status_var.set("Send cancelled due to domain check.")
                 return
 
-    status_var.set(f"Sending to: {to_email}...")
-    root.update_idletasks()
+        self.status_var.set(f"Sending to {to_email}...")
+        self.root.update_idletasks()
 
-    try:
-        msg = MIMEText(message_body)
-        msg['Subject'] = subject
-        msg['From'] = sender_email
-        msg['To'] = to_email
+        try:
+            self.email_sender.send(cfg, to_email, subject, body)
+            self.status_var.set(f"Email successfully sent to {to_email}!")
+            messagebox.showinfo("Success", f"Email sent to {to_email}!", parent=self.root)
+        except smtplib.SMTPAuthenticationError:
+            messagebox.showerror("Authentication Error", "SMTP authentication failed. Check your email and App Password.", parent=self.root)
+            self.status_var.set("Authentication failed. Please re-configure.")
+        except Exception as e:
+            messagebox.showerror("Sending Error", f"An error occurred: {e}", parent=self.root)
+            self.status_var.set(f"Error: {e}")
+            logging.error(f"Failed to send email: {e}", exc_info=True)
+            
+    def _open_config_window(self):
+        """Opens a Toplevel window to configure all settings."""
+        # This fixes the duplicated code bug and centralizes settings.
+        config_win = tk.Toplevel(self.root)
+        config_win.title("Configure Account & Settings")
+        config_win.transient(self.root)
+        config_win.grab_set()
+        config_win.resizable(False, False)
 
-        with smtplib.SMTP_SSL('smtp.gmail.com', 465) as server:
-            server.login(sender_email, app_password)
-            server.sendmail(sender_email, to_email, msg.as_string())
+        frame = ttk.Frame(config_win, padding="15")
+        frame.pack(fill="both", expand=True)
+
+        # Variables for the entry fields, pre-filled with current config
+        cfg = self.config_manager.config
+        email_var = tk.StringVar(value=cfg.get("email", ""))
+        password_var = tk.StringVar() # Always empty for security
+        server_var = tk.StringVar(value=cfg.get("smtp_server", "smtp.gmail.com"))
+        port_var = tk.IntVar(value=cfg.get("smtp_port", 465))
+        check_domain_var = tk.BooleanVar(value=cfg.get("check_recipient_domain", True))
+
+        # Account Credentials
+        cred_frame = ttk.LabelFrame(frame, text="Account Credentials", padding="10")
+        cred_frame.pack(fill="x", expand=True, pady=5)
+        cred_frame.columnconfigure(1, weight=1)
+        ttk.Label(cred_frame, text="Email:").grid(row=0, column=0, sticky="w", pady=3)
+        ttk.Entry(cred_frame, textvariable=email_var).grid(row=0, column=1, sticky="ew")
+        ttk.Label(cred_frame, text="App Password:").grid(row=1, column=0, sticky="w", pady=3)
+        ttk.Entry(cred_frame, textvariable=password_var, show="*").grid(row=1, column=1, sticky="ew")
+
+        # SMTP Settings
+        smtp_frame = ttk.LabelFrame(frame, text="SMTP Server", padding="10")
+        smtp_frame.pack(fill="x", expand=True, pady=5)
+        smtp_frame.columnconfigure(1, weight=1)
+        ttk.Label(smtp_frame, text="Server Address:").grid(row=0, column=0, sticky="w", pady=3)
+        ttk.Entry(smtp_frame, textvariable=server_var).grid(row=0, column=1, sticky="ew")
+        ttk.Label(smtp_frame, text="Port (SSL):").grid(row=1, column=0, sticky="w", pady=3)
+        ttk.Entry(smtp_frame, textvariable=port_var, width=10).grid(row=1, column=1, sticky="w")
         
-        status_var.set(f"Email sent successfully to {to_email}!")
-        messagebox.showinfo("Success", f"Email sent to {to_email}", parent=root)
-        # Optionally clear fields:
-        # to_entry_var.set("")
-        # subject_entry_var.set("")
-        # message_text.delete("1.0", tk.END)
-
-    except smtplib.SMTPAuthenticationError:
-        status_var.set("Error: SMTP Auth failed. Check email/App Password in keyring.")
-        messagebox.showerror("Auth Error", "Gmail Auth Failed. Check email & App Password in keyring. Ensure 2-Step is ON.", parent=root)
-    except smtplib.SMTPConnectError:
-        status_var.set("Error: Could not connect to Gmail SMTP server.")
-        messagebox.showerror("Connection Error", "Cannot connect to Gmail SMTP. Check internet.", parent=root)
-    except keyring.errors.NoKeyringError: # Should be caught earlier, but defensive
-        status_var.set("Error: Keyring backend not found. Cannot retrieve password.")
-        messagebox.showerror("Keyring Error", "No system keyring. Cannot retrieve password to send.", parent=root)
-    except Exception as e:
-        status_var.set(f"Error sending email: {e}")
-        messagebox.showerror("Sending Error", f"An unexpected error occurred: {e}", parent=root)
-
-# --- SET THE WINDOW ICON / LOGO ---
-app_icon = None # Initialize app_icon
-try:
-    # Attempt to load the icon. If successful, app_icon will be updated.
-    loaded_icon = tk.PhotoImage(file='logo.gif')
-    root.iconphoto(False, loaded_icon)
-    app_icon = loaded_icon # Assign to global app_icon only on success
-    print("App icon loaded successfully.")
-except tk.TclError as e:
-    print(f"Could not load logo.gif (TclError): {e}. Ensure it's a valid GIF.")
-except Exception as e:
-    print(f"Could not load logo.gif: {e}")
-
-# --- Load initial configuration ---
-load_config_keyring() # This will also set an initial status_var message
-
-# --- Main Menu ---
-menubar = tk.Menu(root)
-root.config(menu=menubar)
-
-account_menu = tk.Menu(menubar, tearoff=0)
-menubar.add_cascade(label="Account", menu=account_menu)
-account_menu.add_command(label="Configure Email Account", command=open_config_window)
-
-options_menu = tk.Menu(menubar, tearoff=0)
-menubar.add_cascade(label="Options", menu=options_menu)
-options_menu.add_command(label="Settings", command=open_settings_window)
-
-# --- Add Help Menu --- 
-help_menu = tk.Menu(menubar, tearoff=0)
-menubar.add_cascade(label="Help", menu=help_menu)
-help_menu.add_command(label="About ZeeMail", command=show_about_dialog)
-
-file_menu = tk.Menu(menubar, tearoff=0)
-menubar.add_cascade(label="File", menu=file_menu)
-# Add the new command here
-file_menu.add_command(label="Clear Form", command=clear_fields_action)
-file_menu.add_separator() # Optional: visually separates Clear Form from Exit
-file_menu.add_command(label="Exit", command=root.quit)
-
-# --- Configure Grid Layout for Main Window ---
-root.columnconfigure(1, weight=1) # Column with entry fields and message body
-root.rowconfigure(3, weight=1)    # Row with the message body
-
-# --- WIDGETS for Main Window ---
-
-# Row 1 (shifted due to menu): "To" field
-to_label = ttk.Label(root, text="To:")
-to_label.grid(row=1, column=0, padx=10, pady=(10,5), sticky="w") # More top padding for first field
-to_entry = ttk.Entry(root, textvariable=to_entry_var, width=50)
-to_entry.grid(row=1, column=1, padx=10, pady=(10,5), sticky="ew")
-
-# Row 2: "Subject" field
-subject_label = ttk.Label(root, text="Subject:")
-subject_label.grid(row=2, column=0, padx=10, pady=5, sticky="w")
-subject_entry = ttk.Entry(root, textvariable=subject_entry_var, width=50)
-subject_entry.grid(row=2, column=1, padx=10, pady=5, sticky="ew")
-
-# Row 3: "Message" Label and Text Area
-message_label = ttk.Label(root, text="Message:")
-message_label.grid(row=3, column=0, padx=10, pady=5, sticky="nw") # North-West for label
-message_text = scrolledtext.ScrolledText(root, wrap=tk.WORD, width=60, height=15)
-message_text.grid(row=3, column=1, padx=10, pady=5, sticky="nsew") # Stretchy
-
-# Row 4: Buttons Frame
-buttons_frame = ttk.Frame(root)
-buttons_frame.grid(row=4, column=1, padx=10, pady=10, sticky="e") # Align the frame to the right
-
-clear_button = ttk.Button(buttons_frame, text="Clear Fields", command=clear_fields_action)
-clear_button.pack(side=tk.LEFT, padx=(0, 5)) # Add some padding between buttons
-
-send_button = ttk.Button(buttons_frame, text="Send Email", command=send_email_action)
-send_button.pack(side=tk.LEFT)
-
-# Row 5: Status Label
-status_label_widget = ttk.Label(root, textvariable=status_var, relief=tk.SUNKEN, anchor="w")
-status_label_widget.grid(row=5, column=0, columnspan=2, padx=10, pady=(5,10), sticky="ew")
+        # Other Settings
+        other_frame = ttk.LabelFrame(frame, text="Options", padding="10")
+        other_frame.pack(fill="x", expand=True, pady=5)
+        check_button = ttk.Checkbutton(other_frame, text="Check recipient domain validity before sending", variable=check_domain_var)
+        check_button.pack(anchor="w")
+        if not DNS_PYTHON_AVAILABLE:
+            check_button.config(state=tk.DISABLED)
+            ttk.Label(other_frame, text="(dnspython library not installed)", foreground="grey").pack(anchor="w", padx=20)
 
 
-to_entry.focus_set()
-_is_root_fully_initialized = True # Set the flag just before starting the main loop
+        def on_save():
+            email = email_var.get().strip()
+            password = password_var.get() # Don't strip password
+            server = server_var.get().strip()
+            
+            if not email or "@" not in email:
+                messagebox.showerror("Input Error", "Please enter a valid email.", parent=config_win)
+                return
+            if not password: # Password must be provided every time for saving
+                messagebox.showerror("Input Error", "App Password is required to save settings.", parent=config_win)
+                return
 
-logging.info("Starting Tkinter main event loop.")
-root.mainloop()
-logging.info("Application event loop finished.") # This logs when mainloop exits
+            try:
+                port = port_var.get()
+                self.config_manager.save_configuration(email, password, server, port, check_domain_var.get())
+                messagebox.showinfo("Success", "Configuration saved securely.", parent=config_win)
+                self._load_initial_config() # Reload to update status bar and in-memory state
+                config_win.destroy()
+            except Exception as e:
+                messagebox.showerror("Save Error", f"Failed to save configuration:\n{e}", parent=config_win)
+
+        # Buttons
+        btn_frame = ttk.Frame(frame, padding=(0, 10, 0, 0))
+        btn_frame.pack(fill="x", expand=True)
+        ttk.Button(btn_frame, text="Save", command=on_save).pack(side="right")
+        ttk.Button(btn_frame, text="Cancel", command=config_win.destroy).pack(side="right", padx=5)
+
+    def _show_about_dialog(self):
+        """Displays the 'About' window."""
+        webbrowser.open_new_tab("https://github.com/alexantSWE/zeemail")
+        messagebox.showinfo(
+            "About ZeeMail",
+            "ZeeMail v1.1.0\n\n"
+            "A simple email sender built with Python and Tkinter.\n"
+            "by Alireza Rezaei (@alexantSWE)\n\n"
+            "The project's GitHub page has been opened for you.",
+            parent=self.root
+        )
+
+def main():
+    """Application entry point."""
+    if not DNS_PYTHON_AVAILABLE:
+        print("Warning: dnspython library not found. Recipient domain check will be disabled.")
+    
+    root = tk.Tk()
+    app = EmailApp(root)
+    root.mainloop()
+
+if __name__ == "__main__":
+    main()
