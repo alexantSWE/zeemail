@@ -5,7 +5,7 @@
 
 ZeeMail is a simple desktop application designed for one thing: sending emails quickly and reliably. It securely stores your credentials in your system's native keychain and provides a clean, distraction-free interface. It serves as a great example of a modern, object-oriented Tkinter application.
 
-
+![alt text](screenshot.png "main window")
 ---
 
 ## ✨ Features
